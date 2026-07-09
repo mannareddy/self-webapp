@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script>(function(){var t=localStorage.getItem('selfTheme'); if(t==='light') document.documentElement.setAttribute('data-theme','light');})();</script>
+  <title>Settings — The Ultimate Journey</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&family=EB+Garamond:ital@0;1&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/theme.css">
+</head>
+<body>
+  <button class="theme-toggle-fixed" id="theme-toggle-btn" onclick="toggleAppTheme()" aria-label="Toggle theme">&#9788;</button>
+  <div class="shell shell--top">
+    <h2>Settings</h2>
+    <p class="muted" id="account-email">Loading…</p>
+
+    <div style="margin-top: var(--space-lg); display: flex; flex-direction: column; gap: var(--space-sm); align-items: flex-start;">
+      <button class="btn-quiet" id="export-btn">Download my answers</button>
+      <button class="btn-quiet" id="signout-btn">Sign out</button>
+    </div>
+
+    <p class="faint" style="margin-top: var(--space-xl);"><a href="return.html">← back to Return</a></p>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <script src="js/supabase-client.js"></script>
+  <script>
+    (async () => {
+      const session = await requireAuth();
+      if (!session) return;
+      document.getElementById('account-email').textContent = session.user.email;
+    })();
+
+    document.getElementById('signout-btn').addEventListener('click', async () => {
+      await supabaseClient.auth.signOut();
+      window.location.href = 'index.html';
+    });
+
+    // Data export: every response this user has ever written, as a clean
+    // human-readable Markdown file — grouped by stage, prompts and answers
+    // in reading order, dates written out normally. No field names, no IDs,
+    // nothing that looks like a database dump. Same underlying data as
+    // before; this is a trust-building feature, not a v2 nice-to-have —
+    // people should always be able to walk away with everything they wrote,
+    // in a form they'd actually want to read.
+    function formatDate(isoString) {
+      return new Date(isoString).toLocaleDateString('en-US', {
+        month: 'long', day: 'numeric', year: 'numeric'
+      });
+    }
+
+    document.getElementById('export-btn').addEventListener('click', async () => {
+      const { data: { session } } = await supabaseClient.auth.getSession();
+      const { data: rows, error } = await supabaseClient
+        .from('responses')
+        .select('answer, created_at, moments(prompt, order, stage_id, stages(title, order))')
+        .eq('user_id', session.user.id)
+        .order('created_at', { ascending: true });
+
+      if (error) {
+        alert('Could not export right now — please try again.');
+        return;
+      }
+
+      if (!rows || rows.length === 0) {
+        alert('No reflections saved yet.');
+        return;
+      }
+
+      // Group by stage, then by moment (prompt), preserving each
+      // moment's answers in the order they were originally given.
+      const stages = new Map(); // stage order -> { title, moments: Map(moment order -> {prompt, answers: []}) }
+      rows.forEach((row) => {
+        const stage = row.moments.stages;
+        if (!stages.has(stage.order)) {
+          stages.set(stage.order, { title: stage.title, moments: new Map() });
+        }
+        const stageEntry = stages.get(stage.order);
+        const momentOrder = row.moments.order;
+        if (!stageEntry.moments.has(momentOrder)) {
+          stageEntry.moments.set(momentOrder, { prompt: row.moments.prompt, answers: [] });
+        }
+        stageEntry.moments.get(momentOrder).answers.push({
+          answer: row.answer,
+          date: row.created_at
+        });
+      });
+
+      const sortedStageKeys = [...stages.keys()].sort((a, b) => a - b);
+
+      let md = `# My Journey\n\n`;
+      sortedStageKeys.forEach((stageKey) => {
+        const stage = stages.get(stageKey);
+        md += `## ${stage.title}\n\n`;
+
+        const sortedMomentKeys = [...stage.moments.keys()].sort((a, b) => a - b);
+        sortedMomentKeys.forEach((momentKey) => {
+          const moment = stage.moments.get(momentKey);
+          md += `**${moment.prompt}**\n\n`;
+          moment.answers.forEach((entry) => {
+            md += `*${formatDate(entry.date)}*\n\n${entry.answer}\n\n`;
+          });
+        });
+      });
+
+      const blob = new Blob([md], { type: 'text/markdown' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'my-journey.md';
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+  </script>
+  <script src="js/theme.js"></script>
+</body>
+</html>
