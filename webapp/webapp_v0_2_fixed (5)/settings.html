@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script>(function(){var t=localStorage.getItem('selfTheme'); if(t==='light') document.documentElement.setAttribute('data-theme','light');})();</script>
+  <title>Settings — The Ultimate Journey</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&family=EB+Garamond:ital@0;1&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/theme.css">
+</head>
+<body>
+  <button class="theme-toggle-fixed" id="theme-toggle-btn" onclick="toggleAppTheme()" aria-label="Toggle theme">&#9788;</button>
+  <div class="shell shell--top">
+    <h2>Settings</h2>
+    <p class="muted" id="account-email">Loading…</p>
+
+    <div style="margin-top: var(--space-lg); display: flex; flex-direction: column; gap: var(--space-sm); align-items: flex-start;">
+      <button class="btn-quiet" id="export-btn">Download my answers</button>
+      <button class="btn-quiet" id="signout-btn">Sign out</button>
+    </div>
+
+    <p class="faint" style="margin-top: var(--space-xl);"><a href="return.html">← back to Return</a></p>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <script src="js/supabase-client.js"></script>
+  <script>
+    (async () => {
+      const session = await requireAuth();
+      if (!session) return;
+      document.getElementById('account-email').textContent = session.user.email;
+    })();
+
+    document.getElementById('signout-btn').addEventListener('click', async () => {
+      await supabaseClient.auth.signOut();
+      window.location.href = 'index.html';
+    });
+
+    // Simple data export: every response this user has ever written,
+    // as plain JSON. This is a trust-building feature, not a v2 nice-to-have —
+    // people should always be able to walk away with everything they wrote.
+    document.getElementById('export-btn').addEventListener('click', async () => {
+      const { data: { session } } = await supabaseClient.auth.getSession();
+      const { data: responses, error } = await supabaseClient
+        .from('responses')
+        .select('answer, created_at, moments(prompt, stage_id, stages(title))')
+        .eq('user_id', session.user.id)
+        .order('created_at', { ascending: true });
+
+      if (error) {
+        alert('Could not export right now — please try again.');
+        return;
+      }
+
+      const blob = new Blob([JSON.stringify(responses, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'my-journey.json';
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+  </script>
+  <script src="js/theme.js"></script>
+</body>
+</html>

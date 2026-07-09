@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script>(function(){var t=localStorage.getItem('selfTheme'); if(t==='light') document.documentElement.setAttribute('data-theme','light');})();</script>
+  <title>Return — The Ultimate Journey</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&family=EB+Garamond:ital@0;1&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/theme.css">
+</head>
+<body>
+  <button class="theme-toggle-fixed" id="theme-toggle-btn" onclick="toggleAppTheme()" aria-label="Toggle theme">&#9788;</button>
+  <div class="shell shell--top">
+    <div style="display: flex; justify-content: space-between; align-items: baseline;">
+      <h1 style="font-size: 1.8rem;">Return</h1>
+      <a href="settings.html" class="faint">settings</a>
+    </div>
+
+    <p class="progress-line" id="progress-line">Loading your journey…</p>
+
+    <div id="cta-area" style="margin-bottom: var(--space-sm);"></div>
+
+    <p class="faint" style="margin-bottom: var(--space-lg);">
+      <a href="the-return.html">Who are you, today? — revisit the first question</a>
+    </p>
+
+    <div id="stage-list"></div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <script src="js/supabase-client.js"></script>
+  <script>
+    (async () => {
+      const session = await requireAuth();
+      if (!session) return;
+      const userId = session.user.id;
+
+      // --- Pull everything we need in a few queries ---
+      // NOTE: intentionally NOT filtering with .gt('order', 0) here.
+      // "order" is a PostgREST-reserved top-level query parameter (used
+      // for sort direction), so using it as a FILTER key collides with
+      // that reserved word — the request silently errors, `stages`
+      // comes back null, and the stage-list render below throws before
+      // ever running. Fetching everything and filtering in JS avoids
+      // the collision entirely.
+      const { data: rawStages } = await supabaseClient
+        .from('stages')
+        .select('id, title, subtitle, "order"')
+        .order('order');
+
+      const stages = (rawStages || []).filter(s => s.order > 0);  // exclude the onboarding-only stage (order 0)
+
+      // Same fix as checkin.html: order by the stage's own order first,
+      // then the moment's order within that stage — sorted client-side.
+      // `.order(col, { foreignTable })` only reorders items inside a
+      // nested ARRAY (one-to-many embeds). Here each moment embeds a
+      // single stage (many-to-one), so that option is a silent no-op —
+      // it never actually reordered the outer rows. That's what was
+      // producing the "random phase" CTA and stage-list ordering.
+      const { data: rawMoments } = await supabaseClient
+        .from('moments')
+        .select('id, stage_id, prompt, "order", stages("order")');
+
+      const moments = (rawMoments || []).slice().sort((a, b) => {
+        const stageOrderA = a.stages?.order ?? 0;
+        const stageOrderB = b.stages?.order ?? 0;
+        if (stageOrderA !== stageOrderB) return stageOrderA - stageOrderB;
+        return a.order - b.order;
+      });
+
+      const { data: responses } = await supabaseClient
+        .from('responses')
+        .select('moment_id, created_at')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: true });
+
+      // --- Time-based progress line (not a percentage) ---
+      const totalReflections = responses.length;
+      let progressText = "You haven't started yet — today's a good day to begin.";
+      if (totalReflections > 0) {
+        const firstDate = new Date(responses[0].created_at);
+        const daysSince = Math.max(1, Math.floor((Date.now() - firstDate) / (1000 * 60 * 60 * 24)));
+        const reflectionWord = totalReflections === 1 ? 'reflection' : 'reflections';
+        progressText = `${totalReflections} ${reflectionWord} captured. Your journey began ${daysSince} day${daysSince === 1 ? '' : 's'} ago.`;
+      }
+      document.getElementById('progress-line').textContent = progressText;
+
+      // --- Which moments has this user already answered? ---
+      const answeredMomentIds = new Set(responses.map(r => r.moment_id));
+
+      // --- Find the next unanswered moment across all stages, in order ---
+      let nextMoment = null;
+      for (const m of moments) {
+        if (!answeredMomentIds.has(m.id)) { nextMoment = m; break; }
+      }
+
+      const ctaArea = document.getElementById('cta-area');
+      if (nextMoment) {
+        ctaArea.innerHTML = `<a href="checkin.html?moment=${nextMoment.id}"><button class="btn-primary">Today's reflection</button></a>`;
+      } else {
+        ctaArea.innerHTML = `<p class="muted" style="font-style: italic;">You've answered everything here so far. Come back — there's always more to notice.</p>`;
+      }
+
+      // --- Stage list with simple done/pending status ---
+      const stageListEl = document.getElementById('stage-list');
+      stages.forEach(stage => {
+        const stageMoments = moments.filter(m => m.stage_id === stage.id);
+        const answeredCount = stageMoments.filter(m => answeredMomentIds.has(m.id)).length;
+        const isComplete = stageMoments.length > 0 && answeredCount === stageMoments.length;
+
+        const row = document.createElement('div');
+        row.className = 'stage-row' + (isComplete ? ' complete' : '');
+        row.innerHTML = `
+          <span class="stage-title">${stage.title}</span>
+          <span class="stage-status">${isComplete ? 'complete' : answeredCount + ' / ' + stageMoments.length}</span>
+        `;
+        stageListEl.appendChild(row);
+      });
+    })();
+  </script>
+  <script src="js/theme.js"></script>
+</body>
+</html>
