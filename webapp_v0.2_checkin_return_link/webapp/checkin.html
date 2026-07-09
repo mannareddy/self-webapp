@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script>(function(){var t=localStorage.getItem('selfTheme'); if(t==='light') document.documentElement.setAttribute('data-theme','light');})();</script>
+  <title>Reflection — The Ultimate Journey</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&family=EB+Garamond:ital@0;1&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/theme.css">
+</head>
+<body>
+  <button class="theme-toggle-fixed" id="theme-toggle-btn" onclick="toggleAppTheme()" aria-label="Toggle theme">&#9788;</button>
+  <div class="shell" id="loading-state">
+    <p class="muted">One moment…</p>
+  </div>
+
+  <div class="shell" id="question-state" style="display: none;">
+    <p class="faint" id="stage-label" style="margin-bottom: var(--space-sm);"></p>
+    <h2 id="prompt-text"></h2>
+
+    <textarea id="answer" placeholder="Take your time…"></textarea>
+    <div class="save-status" id="draft-status"></div>
+    <div class="error-message" id="error"></div>
+
+    <button class="btn-primary" id="save-btn" style="margin-top: var(--space-sm);" disabled>
+      Save this
+    </button>
+    <p class="faint" style="margin-top: var(--space-md);"><a href="return.html">← Return</a></p>
+  </div>
+
+  <!-- Shown after a successful save — the "guide, don't enforce" pacing choice -->
+  <div class="shell" id="saved-state" style="display: none;">
+    <p class="muted" style="font-style: italic; margin-bottom: var(--space-lg);">Saved.</p>
+    <div style="display: flex; gap: var(--space-sm); flex-wrap: wrap;">
+      <a href="return.html"><button class="btn-quiet">Sit with this for today</button></a>
+      <button class="btn-primary" id="keep-going-btn">Keep going</button>
+    </div>
+  </div>
+
+  <!-- Shown if there's nothing left to answer -->
+  <div class="shell" id="done-state" style="display: none;">
+    <p class="muted" style="font-style: italic;">You've answered everything here so far. Come back — there's always more to notice.</p>
+    <a href="return.html"><button class="btn-quiet" style="margin-top: var(--space-md);">Back to Return</button></a>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <script src="js/supabase-client.js"></script>
+  <script>
+    let currentMoment = null;
+    let session = null;
+    let draftSaveTimer = null;
+
+    function draftKey(momentId) {
+      return `journey-draft-${momentId}`;
+    }
+
+    // ---- Local-only draft autosave (debounced) ----
+    // This is NOT the permanent record — responses are append-only and
+    // only written to Supabase on explicit "Save this". This is purely
+    // a safety net so someone doesn't lose an in-progress thought if
+    // they accidentally close the tab or their phone locks.
+    function scheduleDraftSave(momentId, text) {
+      clearTimeout(draftSaveTimer);
+      draftSaveTimer = setTimeout(() => {
+        localStorage.setItem(draftKey(momentId), text);
+        const statusEl = document.getElementById('draft-status');
+        // Deliberately NOT using the .saved (accent-gold) styling here —
+        // that color is reserved for an actual recorded save. This is
+        // just a local safety net, so it stays in the neutral/faint
+        // color and says so explicitly, to avoid reading as "done."
+        statusEl.textContent = 'Backed up on this device — tap "Save this" to record it';
+      }, 800);
+    }
+
+    async function loadMoment(momentId) {
+      const { data: moment, error } = await supabaseClient
+        .from('moments')
+        .select('id, prompt, stage_id, stages(title)')
+        .eq('id', momentId)
+        .single();
+
+      if (error || !moment) {
+        document.getElementById('loading-state').innerHTML =
+          '<p class="error-message">Could not load this reflection. Please go back and try again.</p>';
+        return;
+      }
+
+      currentMoment = moment;
+      document.getElementById('stage-label').textContent = moment.stages ? moment.stages.title : '';
+      document.getElementById('prompt-text').textContent = moment.prompt;
+
+      const textarea = document.getElementById('answer');
+      textarea.value = localStorage.getItem(draftKey(momentId)) || '';
+      const saveBtn = document.getElementById('save-btn');
+      saveBtn.disabled = textarea.value.trim().length === 0;
+      // Reset the label explicitly. Without this, a button left saying
+      // "Saving…" from the PREVIOUS question's successful save would
+      // carry over — it's only ever reset on the error path, not here.
+      saveBtn.textContent = 'Save this';
+
+      document.getElementById('loading-state').style.display = 'none';
+      document.getElementById('saved-state').style.display = 'none';
+      document.getElementById('done-state').style.display = 'none';
+      document.getElementById('question-state').style.display = 'block';
+      textarea.focus();
+    }
+
+    async function findNextUnansweredMoment(excludeMomentId) {
+      // Fetch with the stage's order embedded, then sort client-side.
+      // NOTE: `.order(col, { foreignTable })` in PostgREST only sorts
+      // items *inside* a nested array (a one-to-many embed). Here each
+      // moment belongs to exactly one stage (many-to-one), so that
+      // option is a silent no-op — it does NOT reorder the outer rows.
+      // Sorting in JS after the fetch is the only reliable way to get
+      // "stage order, then moment order" from this shape of query.
+      const { data: rawMoments } = await supabaseClient
+        .from('moments')
+        .select('id, "order", stage_id, stages("order")');
+
+      const moments = (rawMoments || []).slice().sort((a, b) => {
+        const stageOrderA = a.stages?.order ?? 0;
+        const stageOrderB = b.stages?.order ?? 0;
+        if (stageOrderA !== stageOrderB) return stageOrderA - stageOrderB;
+        return a.order - b.order;
+      });
+
+      const { data: responses } = await supabaseClient
+        .from('responses')
+        .select('moment_id')
+        .eq('user_id', session.user.id);
+
+      const answered = new Set(responses.map(r => r.moment_id));
+      if (excludeMomentId) answered.add(excludeMomentId);
+
+      for (const m of moments) {
+        if (!answered.has(m.id)) return m.id;
+      }
+      return null;
+    }
+
+    (async () => {
+      session = await requireAuth();
+      if (!session) return;
+
+      const params = new URLSearchParams(window.location.search);
+      let momentId = params.get('moment');
+
+      if (!momentId) {
+        // No moment specified — find the next unanswered one automatically.
+        momentId = await findNextUnansweredMoment(null);
+        if (!momentId) {
+          document.getElementById('loading-state').style.display = 'none';
+          document.getElementById('done-state').style.display = 'block';
+          return;
+        }
+      }
+
+      await loadMoment(momentId);
+    })();
+
+    const textarea = document.getElementById('answer');
+    textarea.addEventListener('input', () => {
+      document.getElementById('save-btn').disabled = textarea.value.trim().length === 0;
+      document.getElementById('draft-status').classList.remove('saved');
+      document.getElementById('draft-status').textContent = '';
+      if (currentMoment) scheduleDraftSave(currentMoment.id, textarea.value);
+    });
+
+    document.getElementById('save-btn').addEventListener('click', async () => {
+      const errorEl = document.getElementById('error');
+      const saveBtn = document.getElementById('save-btn');
+      errorEl.textContent = '';
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Saving…';
+
+      const { error } = await supabaseClient.from('responses').insert({
+        user_id: session.user.id,
+        moment_id: currentMoment.id,
+        answer: textarea.value.trim()
+      });
+
+      if (error) {
+        errorEl.textContent = 'Could not save — please try again.';
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Save this';
+        return;
+      }
+
+      // Clear the local draft now that it's permanently recorded.
+      localStorage.removeItem(draftKey(currentMoment.id));
+
+      document.getElementById('question-state').style.display = 'none';
+      document.getElementById('saved-state').style.display = 'block';
+    });
+
+    document.getElementById('keep-going-btn').addEventListener('click', async () => {
+      const nextId = await findNextUnansweredMoment(currentMoment.id);
+      document.getElementById('saved-state').style.display = 'none';
+      if (nextId) {
+        await loadMoment(nextId);
+      } else {
+        document.getElementById('done-state').style.display = 'block';
+      }
+    });
+  </script>
+  <script src="js/theme.js"></script>
+</body>
+</html>
