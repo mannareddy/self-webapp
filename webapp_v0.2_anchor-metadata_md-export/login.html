@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script>(function(){var t=localStorage.getItem('selfTheme'); if(t==='light') document.documentElement.setAttribute('data-theme','light');})();</script>
+  <title>Sign in — The Ultimate Journey</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&family=EB+Garamond:ital@0;1&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/theme.css">
+</head>
+<body>
+  <button class="theme-toggle-fixed" id="theme-toggle-btn" onclick="toggleAppTheme()" aria-label="Toggle theme">&#9788;</button>
+  <div class="shell">
+    <h2 id="heading">Sign in</h2>
+    <p class="muted" id="subheading">We'll email you a link — no password to remember.</p>
+
+    <form id="auth-form">
+      <label for="email">Email</label>
+      <input type="email" id="email" required autocomplete="email" placeholder="you@example.com">
+      <div class="error-message" id="error"></div>
+      <button type="submit" class="btn-primary" style="margin-top: var(--space-sm); width: 100%;" id="submit-btn">
+        Send me a link
+      </button>
+    </form>
+
+    <div id="sent-message" style="display: none; margin-top: var(--space-md);">
+      <p>Check your email — we sent a link to sign in. You can close this tab.</p>
+    </div>
+
+    <p class="faint" style="margin-top: var(--space-lg);"><a href="index.html">← back</a></p>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <script src="js/supabase-client.js"></script>
+  <script>
+    // If arriving with ?mode=signup, adjust copy slightly.
+    // Functionally identical either way — Supabase magic link
+    // creates the account automatically on first sign-in.
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('mode') === 'signup') {
+      document.getElementById('heading').textContent = 'Begin';
+      document.getElementById('subheading').textContent =
+        "Enter your email. We'll send a link — no password needed, and it creates your account automatically the first time.";
+    }
+
+    const form = document.getElementById('auth-form');
+    const errorEl = document.getElementById('error');
+    const submitBtn = document.getElementById('submit-btn');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errorEl.textContent = '';
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Sending…';
+
+      const email = document.getElementById('email').value.trim();
+
+      try {
+        const { error } = await supabaseClient.auth.signInWithOtp({
+          email,
+          options: {
+            emailRedirectTo: window.location.origin + '/onboarding.html'
+          }
+        });
+
+        if (error) {
+          console.error('Supabase signInWithOtp error:', error);
+          errorEl.textContent = error.message;
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'Send me a link';
+          return;
+        }
+
+        form.style.display = 'none';
+        document.getElementById('sent-message').style.display = 'block';
+      } catch (err) {
+        // Catches network failures, CORS issues, or anything else that
+        // throws instead of returning a normal { error } response —
+        // this is what was likely causing the button to hang forever.
+        console.error('Unexpected error during sign-in:', err);
+        errorEl.textContent = 'Something went wrong connecting to the server. Check the browser console for details.';
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Send me a link';
+      }
+    });
+
+    // If a session already exists (e.g. clicked the link, landed here by mistake),
+    // send them straight to the app instead of asking them to sign in again.
+    (async () => {
+      const { data: { session } } = await supabaseClient.auth.getSession();
+      if (session) window.location.href = 'return.html';
+    })();
+  </script>
+  <script src="js/theme.js"></script>
+</body>
+</html>
