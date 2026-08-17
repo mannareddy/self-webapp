@@ -103,11 +103,15 @@
       }
 
       // --- Stage list with simple done/pending status ---
+      // Skip any stage with zero linked moments — a 0/0 row is either a
+      // duplicate stage record or one that hasn't been populated with
+      // moments yet, and it isn't useful to show the user either way.
       const stageListEl = document.getElementById('stage-list');
       stages.forEach(stage => {
         const stageMoments = moments.filter(m => m.stage_id === stage.id);
+        if (stageMoments.length === 0) return;
         const answeredCount = stageMoments.filter(m => answeredMomentIds.has(m.id)).length;
-        const isComplete = stageMoments.length > 0 && answeredCount === stageMoments.length;
+        const isComplete = answeredCount === stageMoments.length;
 
         const row = document.createElement('div');
         row.className = 'stage-row' + (isComplete ? ' complete' : '');
