@@ -11,7 +11,14 @@
 </head>
 <body>
   <button class="theme-toggle-fixed" id="theme-toggle-btn" onclick="toggleAppTheme()" aria-label="Toggle theme">&#9788;</button>
-  <div class="shell">
+
+  <!-- Shown while checking for an existing session — prevents a flash of the
+       sign-in form for someone who's already logged in on this device. -->
+  <div class="shell" id="loading-state">
+    <p class="muted">One moment…</p>
+  </div>
+
+  <div class="shell" id="form-state" style="display: none;">
     <h2 id="heading">Sign in</h2>
     <p class="muted" id="subheading">We'll email you a link — no password to remember.</p>
 
@@ -43,6 +50,20 @@
       document.getElementById('subheading').textContent =
         "Enter your email. We'll send a link — no password needed, and it creates your account automatically the first time.";
     }
+
+    // Check for an existing session FIRST, before showing anything else.
+    // If one exists, redirect straight to return.html — no point showing
+    // the sign-in form for a second before bouncing away from it.
+    (async () => {
+      const { data: { session } } = await supabaseClient.auth.getSession();
+      if (session) {
+        window.location.href = 'return.html';
+        return;
+      }
+      // Genuinely signed out — reveal the form.
+      document.getElementById('loading-state').style.display = 'none';
+      document.getElementById('form-state').style.display = 'block';
+    })();
 
     const form = document.getElementById('auth-form');
     const errorEl = document.getElementById('error');
@@ -84,13 +105,6 @@
         submitBtn.textContent = 'Send me a link';
       }
     });
-
-    // If a session already exists (e.g. clicked the link, landed here by mistake),
-    // send them straight to the app instead of asking them to sign in again.
-    (async () => {
-      const { data: { session } } = await supabaseClient.auth.getSession();
-      if (session) window.location.href = 'return.html';
-    })();
   </script>
   <script src="js/theme.js"></script>
 </body>
